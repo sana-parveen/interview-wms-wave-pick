@@ -1,0 +1,22 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.iml
+*.swp
+*~
+
+# Interviewer-only material (rubric, guide, signals) — never ship to candidate
+/_interviewer/
+
+# Local interviewer scratch (drafts of rubrics, notes per candidate, etc.)
+/local/
+/scratch/
+NOTES.local.md
+candidate-*.md
+
+# Logs / dumps
+*.log
