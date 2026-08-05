@@ -102,6 +102,8 @@ git push origin your-full-name
 
 Then reply to the interview invitation email to let us know your submission is ready.
 
+*Important*: Repository access is automatically revoked approximately *2.5 hours after your scheduled time*. Please make sure you commit and push all of your work before then, even if your solution is only partially complete. We would much rather review an incomplete submission than lose your work because it wasn't pushed in time.
+
 ---
 
 # What happens next
