@@ -16,6 +16,14 @@ There are several important constraints and design expectations explained throug
 
 ---
 
+# What we're looking for
+
+This exercise is *not* about producing the perfect solution. We're much more interested in seeing **how you think** than whether every endpoint is implemented or every edge case is covered.
+Please approach this exercise honestly and authentically. We want to evaluate your engineering ability, your reasoning, and your decision-making.
+Using AI coding assistants (ChatGPT, Claude, Copilot, Cursor, etc.) makes it difficult for us to understand you as an engineer. We'd much rather review an incomplete solution that genuinely reflects your own work than a polished solution that you can't fully explain, reason about, or confidently evolve during the follow-up pairing session.
+
+---
+
 # Repository setup
 
 1. Clone this repository locally.
