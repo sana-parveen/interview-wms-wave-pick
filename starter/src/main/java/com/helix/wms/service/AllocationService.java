@@ -1,5 +1,6 @@
 package com.helix.wms.service;
 
+import com.helix.wms.api.dto.AllocateConflictResponse;
 import com.helix.wms.api.dto.AllocateResponse;
 import com.helix.wms.repository.AllocationRepository;
 import com.helix.wms.repository.AllocationRepository.BinAvailabilityRow;
@@ -40,51 +41,80 @@ public class AllocationService {
                     HttpStatus.BAD_REQUEST, "order has no lines: " + orderId);
         }
 
+        AllocationPlan plan = planAllocation(orderId, lines);
+        if (!plan.canFullyAllocate()) {
+            throw new InsufficientInventoryException(plan.conflictResponse());
+        }
+
         List<AllocateResponse.Reservation> reservations = new ArrayList<>();
-        for (OrderLineRow line : lines) {
-            reservations.addAll(allocateLine(orderId, line));
+        for (PlannedReservation planned : plan.reservations()) {
+            String reservationId = "R-" + UUID.randomUUID().toString().substring(0, 8);
+            allocation.incrementReserved(planned.binId(), planned.skuId(), planned.quantity());
+            allocation.insertReservation(
+                    reservationId,
+                    orderId,
+                    planned.lineId(),
+                    planned.binId(),
+                    planned.skuId(),
+                    planned.quantity());
+            reservations.add(new AllocateResponse.Reservation(
+                    reservationId,
+                    planned.lineId(),
+                    planned.binId(),
+                    planned.quantity()));
         }
 
         allocation.updateOrderStatus(orderId, "ALLOCATED");
         return new AllocateResponse(orderId, "ALLOCATED", reservations);
     }
 
-    private List<AllocateResponse.Reservation> allocateLine(String orderId, OrderLineRow line) {
-        int remaining = line.quantityRequired();
-        List<AllocateResponse.Reservation> lineReservations = new ArrayList<>();
+    private AllocationPlan planAllocation(String orderId, List<OrderLineRow> lines) {
+        List<PlannedReservation> plannedReservations = new ArrayList<>();
+        List<AllocateConflictResponse.LineDetail> lineDetails = new ArrayList<>();
+        boolean canFullyAllocate = true;
 
-        for (BinAvailabilityRow bin : allocation.findBinsWithAvailableStock(line.skuId())) {
-            if (remaining == 0) {
-                break;
-            }
-            int take = Math.min(remaining, bin.available());
-            if (take == 0) {
-                continue;
+        for (OrderLineRow line : lines) {
+            int remaining = line.quantityRequired();
+            List<AllocateConflictResponse.BinDetail> couldReserve = new ArrayList<>();
+
+            for (BinAvailabilityRow bin : allocation.findBinsWithAvailableStock(line.skuId())) {
+                if (remaining == 0) {
+                    break;
+                }
+                int take = Math.min(remaining, bin.available());
+                if (take == 0) {
+                    continue;
+                }
+                plannedReservations.add(new PlannedReservation(
+                        line.lineId(), line.skuId(), bin.binId(), take));
+                couldReserve.add(new AllocateConflictResponse.BinDetail(bin.binId(), take));
+                remaining -= take;
             }
 
-            String reservationId = "R-" + UUID.randomUUID().toString().substring(0, 8);
-            allocation.incrementReserved(bin.binId(), bin.skuId(), take);
-            allocation.insertReservation(
-                    reservationId,
-                    orderId,
+            int quantityAvailable = line.quantityRequired() - remaining;
+            if (remaining > 0) {
+                canFullyAllocate = false;
+            }
+            lineDetails.add(new AllocateConflictResponse.LineDetail(
                     line.lineId(),
-                    bin.binId(),
-                    bin.skuId(),
-                    take);
-            lineReservations.add(new AllocateResponse.Reservation(
-                    reservationId,
-                    line.lineId(),
-                    bin.binId(),
-                    take));
-            remaining -= take;
+                    line.skuId(),
+                    line.quantityRequired(),
+                    quantityAvailable,
+                    couldReserve));
         }
 
-        if (remaining > 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "insufficient inventory for sku: " + line.skuId());
-        }
-
-        return lineReservations;
+        AllocateConflictResponse conflict = new AllocateConflictResponse(
+                orderId,
+                "insufficient inventory for full allocation",
+                lineDetails);
+        return new AllocationPlan(canFullyAllocate, plannedReservations, conflict);
     }
+
+    private record PlannedReservation(
+            String lineId, String skuId, String binId, int quantity) {}
+
+    private record AllocationPlan(
+            boolean canFullyAllocate,
+            List<PlannedReservation> reservations,
+            AllocateConflictResponse conflictResponse) {}
 }

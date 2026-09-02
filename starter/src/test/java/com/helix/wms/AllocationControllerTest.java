@@ -88,9 +88,40 @@ class AllocationControllerTest {
     }
 
     @Test
-    @Disabled("T3")
     @DisplayName("T3: when full allocation is impossible, return 409 and reserve nothing")
-    void rejectsPartialAllocationAtomically() {
+    void rejectsPartialAllocationAtomically() throws Exception {
+        mockMvc.perform(post("/orders")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "orderId": "ORD-3",
+                                  "lines": [
+                                    {"lineId": "L1", "skuId": "SKU-RED-MUG", "quantity": 100}
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/orders/ORD-3/allocate"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.orderId").value("ORD-3"))
+                .andExpect(jsonPath("$.lines[0].skuId").value("SKU-RED-MUG"))
+                .andExpect(jsonPath("$.lines[0].quantityRequired").value(100))
+                .andExpect(jsonPath("$.lines[0].quantityAvailable").value(7))
+                .andExpect(jsonPath("$.lines[0].couldReserve.length()").value(2))
+                .andExpect(jsonPath("$.lines[0].couldReserve[0].binId").value("A-12-3"))
+                .andExpect(jsonPath("$.lines[0].couldReserve[0].quantity").value(5))
+                .andExpect(jsonPath("$.lines[0].couldReserve[1].binId").value("A-12-4"))
+                .andExpect(jsonPath("$.lines[0].couldReserve[1].quantity").value(2));
+
+        mockMvc.perform(get("/orders/ORD-3"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW"))
+                .andExpect(jsonPath("$.reservations").isEmpty());
+
+        mockMvc.perform(get("/inventory/SKU-RED-MUG"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalReserved").value(0));
     }
 
     @Test
