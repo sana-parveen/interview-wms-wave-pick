@@ -68,6 +68,7 @@ class PickEventConcurrencyTest {
 
     @AfterEach
     void tearDown() {
+        jdbc.update("DELETE FROM audit_log");
         jdbc.update("DELETE FROM pick_events");
         jdbc.update("DELETE FROM reservations");
         jdbc.update("DELETE FROM order_lines");

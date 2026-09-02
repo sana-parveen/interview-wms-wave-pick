@@ -3,6 +3,7 @@ package com.helix.wms.service;
 import com.helix.wms.api.dto.PickEventRequest;
 import com.helix.wms.api.dto.PickEventResponse;
 import com.helix.wms.api.dto.ShortPickRequest;
+import com.helix.wms.repository.AuditRepository;
 import com.helix.wms.repository.PickEventRepository;
 import com.helix.wms.repository.PickEventRepository.ReservationRow;
 import org.springframework.http.HttpStatus;
@@ -17,9 +18,11 @@ import java.util.UUID;
 public class PickEventService {
 
     private final PickEventRepository picks;
+    private final AuditRepository audit;
 
-    public PickEventService(PickEventRepository picks) {
+    public PickEventService(PickEventRepository picks, AuditRepository audit) {
         this.picks = picks;
+        this.audit = audit;
     }
 
     @Transactional
@@ -69,6 +72,11 @@ public class PickEventService {
         picks.updateOrderLinePicked(reservation.orderId(), reservation.lineId(), linePicked);
 
         refreshOrderStatus(reservation.orderId());
+
+        audit.append(reservation.orderId(), "RESERVATION", req.reservationId(), "PICK_APPLIED",
+                "{\"binId\":\"" + reservation.binId() + "\",\"skuId\":\"" + reservation.skuId()
+                        + "\",\"quantity\":" + req.quantity() + ",\"pickerId\":\""
+                        + req.pickerId() + "\"}");
 
         ReservationRow updated = reservation.withPick(newQuantityPicked, reservationStatus);
         return picks.buildResponse(req.clientEventId(), updated);
@@ -137,6 +145,12 @@ public class PickEventService {
 
         refreshOrderStatus(reservation.orderId());
 
+        audit.append(reservation.orderId(), "RESERVATION", req.reservationId(), "SHORT_PICK_APPLIED",
+                "{\"binId\":\"" + reservation.binId() + "\",\"skuId\":\"" + reservation.skuId()
+                        + "\",\"quantityShort\":" + req.quantityShort() + ",\"foundQuantity\":"
+                        + foundQuantity + ",\"reason\":\"" + req.reason() + "\",\"pickerId\":\""
+                        + req.pickerId() + "\"}");
+
         ReservationRow updated = reservation.withPick(newQuantityPicked, reservationStatus);
         return picks.buildResponse(req.clientEventId(), updated);
     }
@@ -158,12 +172,16 @@ public class PickEventService {
     }
 
     private void refreshOrderStatus(String orderId) {
+        String newStatus;
         if (picks.isOrderFullyPicked(orderId)) {
-            picks.updateOrderStatus(orderId, "PICKED");
+            newStatus = "PICKED";
         } else if (picks.hasShortReservation(orderId)) {
-            picks.updateOrderStatus(orderId, "SHORT");
+            newStatus = "SHORT";
         } else {
-            picks.updateOrderStatus(orderId, "PICKING");
+            newStatus = "PICKING";
         }
+        picks.updateOrderStatus(orderId, newStatus);
+        audit.append(orderId, "ORDER", orderId, "ORDER_STATUS_CHANGED",
+                "{\"status\":\"" + newStatus + "\"}");
     }
 }

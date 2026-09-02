@@ -13,9 +13,11 @@ import java.util.Optional;
 public class OrderRepository {
 
     private final JdbcTemplate jdbc;
+    private final AuditRepository audit;
 
-    public OrderRepository(JdbcTemplate jdbc) {
+    public OrderRepository(JdbcTemplate jdbc, AuditRepository audit) {
         this.jdbc = jdbc;
+        this.audit = audit;
     }
 
     public boolean orderExists(String orderId) {
@@ -41,6 +43,8 @@ public class OrderRepository {
                             "VALUES (?, ?, ?, ?)",
                     orderId, line.lineId(), line.skuId(), line.quantity());
         }
+        audit.append(orderId, "ORDER", orderId, "ORDER_CREATED",
+                "{\"status\":\"NEW\",\"lineCount\":" + lines.size() + "}");
     }
 
     public Optional<OrderResponse> loadOrder(String orderId) {
@@ -74,6 +78,16 @@ public class OrderRepository {
                         rs.getString("status")),
                 orderId);
 
-        return Optional.of(new OrderResponse(header.get(0)[0], header.get(0)[1], lines, reservations));
+        List<OrderResponse.AuditEntry> auditTrail = audit.findByOrderId(orderId).stream()
+                .map(row -> new OrderResponse.AuditEntry(
+                        row.eventType(),
+                        row.entityType(),
+                        row.entityId(),
+                        row.detail(),
+                        row.occurredAt()))
+                .toList();
+
+        return Optional.of(new OrderResponse(
+                header.get(0)[0], header.get(0)[1], lines, reservations, auditTrail));
     }
 }

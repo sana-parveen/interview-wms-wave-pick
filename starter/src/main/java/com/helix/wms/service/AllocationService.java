@@ -5,6 +5,7 @@ import com.helix.wms.api.dto.AllocateResponse;
 import com.helix.wms.repository.AllocationRepository;
 import com.helix.wms.repository.AllocationRepository.BinAvailabilityRow;
 import com.helix.wms.repository.AllocationRepository.OrderLineRow;
+import com.helix.wms.repository.AuditRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,9 +23,11 @@ import java.util.UUID;
 public class AllocationService {
 
     private final AllocationRepository allocation;
+    private final AuditRepository audit;
 
-    public AllocationService(AllocationRepository allocation) {
+    public AllocationService(AllocationRepository allocation, AuditRepository audit) {
         this.allocation = allocation;
+        this.audit = audit;
     }
 
     @Transactional
@@ -70,6 +73,13 @@ public class AllocationService {
                     planned.binId(),
                     planned.skuId(),
                     planned.quantity());
+            audit.append(orderId, "RESERVATION", reservationId, "RESERVATION_OPENED",
+                    "{\"lineId\":\"" + planned.lineId() + "\",\"binId\":\"" + planned.binId()
+                            + "\",\"skuId\":\"" + planned.skuId() + "\",\"quantity\":"
+                            + planned.quantity() + "}");
+            audit.append(orderId, "BIN_STOCK", planned.binId(), "BIN_RESERVED",
+                    "{\"binId\":\"" + planned.binId() + "\",\"skuId\":\"" + planned.skuId()
+                            + "\",\"quantity\":" + planned.quantity() + "}");
             reservations.add(new AllocateResponse.Reservation(
                     reservationId,
                     planned.lineId(),
@@ -78,6 +88,8 @@ public class AllocationService {
         }
 
         allocation.updateOrderStatus(orderId, "ALLOCATED");
+        audit.append(orderId, "ORDER", orderId, "ORDER_ALLOCATED",
+                "{\"status\":\"ALLOCATED\",\"reservationCount\":" + reservations.size() + "}");
         return new AllocateResponse(orderId, "ALLOCATED", reservations);
     }
 

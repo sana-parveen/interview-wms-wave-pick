@@ -6,7 +6,8 @@ public record OrderResponse(
         String orderId,
         String status,
         List<Line> lines,
-        List<Reservation> reservations
+        List<Reservation> reservations,
+        List<AuditEntry> auditTrail
 ) {
     public record Line(
             String lineId,
@@ -22,5 +23,13 @@ public record OrderResponse(
             int quantityReserved,
             int quantityPicked,
             String status
+    ) {}
+
+    public record AuditEntry(
+            String eventType,
+            String entityType,
+            String entityId,
+            String detail,
+            String occurredAt
     ) {}
 }

@@ -1,4 +1,5 @@
 DROP TABLE IF EXISTS pick_events;
+DROP TABLE IF EXISTS audit_log;
 DROP TABLE IF EXISTS reservations;
 DROP TABLE IF EXISTS order_lines;
 DROP TABLE IF EXISTS orders;
@@ -64,6 +65,12 @@ CREATE TABLE pick_events (
     UNIQUE (client_event_id)
 );
 
--- TODO: consider adding an explicit audit_log table to capture state transitions
---       for orders, reservations, and bin_stock so we can answer
---       "what happened to unit X?" after the fact (see brief §5.5 and §9).
+CREATE TABLE audit_log (
+    audit_id     VARCHAR(64) PRIMARY KEY,
+    order_id     VARCHAR(64) NOT NULL,
+    entity_type  VARCHAR(32) NOT NULL,
+    entity_id    VARCHAR(64) NOT NULL,
+    event_type   VARCHAR(32) NOT NULL,
+    detail       VARCHAR(2000),
+    occurred_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
