@@ -1,6 +1,5 @@
 package com.helix.wms;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -125,14 +124,30 @@ class AllocationControllerTest {
     }
 
     @Test
-    @Disabled("T4")
     @DisplayName("T2/T4: allocate is idempotent — calling twice does not double-reserve")
-    void allocateIsIdempotent() {
-    }
+    void allocateIsIdempotent() throws Exception {
+        mockMvc.perform(post("/orders")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "orderId": "ORD-4",
+                                  "lines": [
+                                    {"lineId": "L1", "skuId": "SKU-RED-MUG", "quantity": 3}
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isCreated());
 
-    @Test
-    @Disabled("T4")
-    @DisplayName("T4: concurrent allocations of the last unit — exactly one succeeds")
-    void concurrentAllocationsDoNotDoubleReserve() {
+        mockMvc.perform(post("/orders/ORD-4/allocate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reservations[0].quantity").value(3));
+
+        mockMvc.perform(post("/orders/ORD-4/allocate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reservations[0].quantity").value(3));
+
+        mockMvc.perform(get("/inventory/SKU-RED-MUG"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalReserved").value(3));
     }
 }

@@ -1,5 +1,6 @@
 package com.helix.wms.repository;
 
+import com.helix.wms.api.dto.AllocateResponse;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -19,9 +20,12 @@ public class AllocationRepository {
 
     public record BinAvailabilityRow(String binId, String skuId, int available) {}
 
-    public Optional<String> findOrderStatus(String orderId) {
+    /**
+     * Locks the order row and returns its current status.
+     */
+    public Optional<String> lockOrderForUpdate(String orderId) {
         List<String> statuses = jdbc.query(
-                "SELECT status FROM orders WHERE order_id = ?",
+                "SELECT status FROM orders WHERE order_id = ? FOR UPDATE",
                 (rs, n) -> rs.getString("status"),
                 orderId);
         return statuses.stream().findFirst();
@@ -39,14 +43,14 @@ public class AllocationRepository {
     }
 
     /**
-     * Returns bins with available stock for a SKU, oldest first (FIFO by received_at).
+     * Locks bin rows for a SKU and returns available stock, oldest first (FIFO).
      */
-    public List<BinAvailabilityRow> findBinsWithAvailableStock(String skuId) {
+    public List<BinAvailabilityRow> lockBinsForSku(String skuId) {
         return jdbc.query(
                 "SELECT bin_id, sku_id, quantity_on_hand - quantity_reserved AS available " +
                         "FROM bin_stock " +
                         "WHERE sku_id = ? AND quantity_on_hand - quantity_reserved > 0 " +
-                        "ORDER BY received_at ASC",
+                        "ORDER BY received_at ASC FOR UPDATE",
                 (rs, n) -> new BinAvailabilityRow(
                         rs.getString("bin_id"),
                         rs.getString("sku_id"),
@@ -54,16 +58,13 @@ public class AllocationRepository {
                 skuId);
     }
 
-    public void incrementReserved(String binId, String skuId, int quantity) {
+    public boolean incrementReserved(String binId, String skuId, int quantity) {
         int updated = jdbc.update(
                 "UPDATE bin_stock SET quantity_reserved = quantity_reserved + ? " +
                         "WHERE bin_id = ? AND sku_id = ? " +
                         "AND quantity_on_hand - quantity_reserved >= ?",
                 quantity, binId, skuId, quantity);
-        if (updated != 1) {
-            throw new IllegalStateException(
-                    "failed to reserve " + quantity + " in bin " + binId);
-        }
+        return updated == 1;
     }
 
     public void insertReservation(
@@ -83,5 +84,22 @@ public class AllocationRepository {
 
     public void updateOrderStatus(String orderId, String status) {
         jdbc.update("UPDATE orders SET status = ? WHERE order_id = ?", status, orderId);
+    }
+
+    public AllocateResponse loadAllocateResponse(String orderId) {
+        String status = jdbc.queryForObject(
+                "SELECT status FROM orders WHERE order_id = ?",
+                String.class,
+                orderId);
+        List<AllocateResponse.Reservation> reservations = jdbc.query(
+                "SELECT reservation_id, line_id, bin_id, quantity_reserved " +
+                        "FROM reservations WHERE order_id = ? ORDER BY reservation_id",
+                (rs, n) -> new AllocateResponse.Reservation(
+                        rs.getString("reservation_id"),
+                        rs.getString("line_id"),
+                        rs.getString("bin_id"),
+                        rs.getInt("quantity_reserved")),
+                orderId);
+        return new AllocateResponse(orderId, status, reservations);
     }
 }

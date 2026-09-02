@@ -60,9 +60,8 @@ CREATE TABLE pick_events (
     scanned_barcode VARCHAR(64),
     reason          VARCHAR(32),
     picker_id       VARCHAR(32) NOT NULL,
-    at              TIMESTAMP   NOT NULL
-    -- TODO: add a constraint that prevents the same client_event_id from being
-    --       inserted twice. Remember that retries may arrive concurrently.
+    at              TIMESTAMP   NOT NULL,
+    UNIQUE (client_event_id)
 );
 
 -- TODO: consider adding an explicit audit_log table to capture state transitions

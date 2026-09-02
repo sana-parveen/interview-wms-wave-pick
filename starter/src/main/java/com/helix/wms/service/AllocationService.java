@@ -12,6 +12,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
 
 @Service
@@ -25,9 +29,13 @@ public class AllocationService {
 
     @Transactional
     public AllocateResponse allocate(String orderId) {
-        String status = allocation.findOrderStatus(orderId)
+        String status = allocation.lockOrderForUpdate(orderId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "order not found: " + orderId));
+
+        if (isAlreadyAllocated(status)) {
+            return allocation.loadAllocateResponse(orderId);
+        }
 
         if (!"NEW".equals(status)) {
             throw new ResponseStatusException(
@@ -41,15 +49,20 @@ public class AllocationService {
                     HttpStatus.BAD_REQUEST, "order has no lines: " + orderId);
         }
 
-        AllocationPlan plan = planAllocation(orderId, lines);
+        Map<String, List<BinAvailabilityRow>> lockedBinsBySku = lockBinsForOrder(lines);
+
+        AllocationPlan plan = planAllocation(orderId, lines, lockedBinsBySku);
         if (!plan.canFullyAllocate()) {
             throw new InsufficientInventoryException(plan.conflictResponse());
         }
 
         List<AllocateResponse.Reservation> reservations = new ArrayList<>();
         for (PlannedReservation planned : plan.reservations()) {
+            if (!allocation.incrementReserved(planned.binId(), planned.skuId(), planned.quantity())) {
+                throw new InsufficientInventoryException(plan.conflictResponse());
+            }
+
             String reservationId = "R-" + UUID.randomUUID().toString().substring(0, 8);
-            allocation.incrementReserved(planned.binId(), planned.skuId(), planned.quantity());
             allocation.insertReservation(
                     reservationId,
                     orderId,
@@ -68,7 +81,28 @@ public class AllocationService {
         return new AllocateResponse(orderId, "ALLOCATED", reservations);
     }
 
-    private AllocationPlan planAllocation(String orderId, List<OrderLineRow> lines) {
+    private boolean isAlreadyAllocated(String status) {
+        return "ALLOCATED".equals(status)
+                || "PICKING".equals(status)
+                || "PICKED".equals(status);
+    }
+
+    private Map<String, List<BinAvailabilityRow>> lockBinsForOrder(List<OrderLineRow> lines) {
+        Set<String> skus = new TreeSet<>();
+        for (OrderLineRow line : lines) {
+            skus.add(line.skuId());
+        }
+        Map<String, List<BinAvailabilityRow>> lockedBinsBySku = new TreeMap<>();
+        for (String sku : skus) {
+            lockedBinsBySku.put(sku, allocation.lockBinsForSku(sku));
+        }
+        return lockedBinsBySku;
+    }
+
+    private AllocationPlan planAllocation(
+            String orderId,
+            List<OrderLineRow> lines,
+            Map<String, List<BinAvailabilityRow>> lockedBinsBySku) {
         List<PlannedReservation> plannedReservations = new ArrayList<>();
         List<AllocateConflictResponse.LineDetail> lineDetails = new ArrayList<>();
         boolean canFullyAllocate = true;
@@ -77,7 +111,7 @@ public class AllocationService {
             int remaining = line.quantityRequired();
             List<AllocateConflictResponse.BinDetail> couldReserve = new ArrayList<>();
 
-            for (BinAvailabilityRow bin : allocation.findBinsWithAvailableStock(line.skuId())) {
+            for (BinAvailabilityRow bin : lockedBinsBySku.get(line.skuId())) {
                 if (remaining == 0) {
                     break;
                 }
