@@ -59,9 +59,32 @@ class AllocationControllerTest {
     }
 
     @Test
-    @Disabled("T2")
     @DisplayName("T2: a line larger than any single bin is split across bins")
-    void splitsAcrossMultipleBins() {
+    void splitsAcrossMultipleBins() throws Exception {
+        mockMvc.perform(post("/orders")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "orderId": "ORD-2",
+                                  "lines": [
+                                    {"lineId": "L1", "skuId": "SKU-BLUE-PEN", "quantity": 10}
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/orders/ORD-2/allocate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ALLOCATED"))
+                .andExpect(jsonPath("$.reservations.length()").value(2))
+                .andExpect(jsonPath("$.reservations[0].binId").value("B-04-1"))
+                .andExpect(jsonPath("$.reservations[0].quantity").value(7))
+                .andExpect(jsonPath("$.reservations[1].binId").value("C-09-2"))
+                .andExpect(jsonPath("$.reservations[1].quantity").value(3));
+
+        mockMvc.perform(get("/inventory/SKU-BLUE-PEN"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalReserved").value(10));
     }
 
     @Test

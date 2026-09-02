@@ -17,7 +17,7 @@ public class AllocationRepository {
 
     public record OrderLineRow(String lineId, String skuId, int quantityRequired) {}
 
-    public record BinStockRow(String binId, String skuId) {}
+    public record BinAvailabilityRow(String binId, String skuId, int available) {}
 
     public Optional<String> findOrderStatus(String orderId) {
         List<String> statuses = jdbc.query(
@@ -39,17 +39,19 @@ public class AllocationRepository {
     }
 
     /**
-     * Returns the oldest bin (FIFO by received_at) with enough available stock
-     * to satisfy the full line quantity in a single bin.
+     * Returns bins with available stock for a SKU, oldest first (FIFO by received_at).
      */
-    public Optional<BinStockRow> findBinForFullLine(String skuId, int quantity) {
-        List<BinStockRow> bins = jdbc.query(
-                "SELECT bin_id, sku_id FROM bin_stock " +
-                        "WHERE sku_id = ? AND quantity_on_hand - quantity_reserved >= ? " +
-                        "ORDER BY received_at ASC LIMIT 1",
-                (rs, n) -> new BinStockRow(rs.getString("bin_id"), rs.getString("sku_id")),
-                skuId, quantity);
-        return bins.stream().findFirst();
+    public List<BinAvailabilityRow> findBinsWithAvailableStock(String skuId) {
+        return jdbc.query(
+                "SELECT bin_id, sku_id, quantity_on_hand - quantity_reserved AS available " +
+                        "FROM bin_stock " +
+                        "WHERE sku_id = ? AND quantity_on_hand - quantity_reserved > 0 " +
+                        "ORDER BY received_at ASC",
+                (rs, n) -> new BinAvailabilityRow(
+                        rs.getString("bin_id"),
+                        rs.getString("sku_id"),
+                        rs.getInt("available")),
+                skuId);
     }
 
     public void incrementReserved(String binId, String skuId, int quantity) {
