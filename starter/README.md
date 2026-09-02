@@ -1,85 +1,87 @@
-# Starter Scaffold — WMS Wave Pick Service (Java / Spring Boot)
+# WMS Wave Pick & Reservation Service
 
-This is an **optional** starting point. You can build on it, fork it, ignore it,
-or rewrite it. We grade outcomes and reasoning, not adoption of this scaffold.
+My submission for the Helix take-home. The service runs from this `starter/` directory.
 
 ## Stack
 
-- Java 21, Spring Boot 3.3
-- Maven
-- H2 in-memory database (with `MODE=PostgreSQL`)
-- `JdbcTemplate` for persistence — raw SQL, deliberately, so that concurrency
-  primitives and transaction boundaries are yours to write
-- JUnit 5 + `MockMvc` for tests
+Java 21, Spring Boot 3.3, Maven, H2 (`MODE=PostgreSQL`), and `JdbcTemplate`.
+
+I kept the starter's choice of raw SQL over JPA on purpose — when you're doing `SELECT ... FOR UPDATE` and conditional updates for concurrency, I wanted that logic visible rather than buried in an ORM. H2 in Postgres mode was enough for the exercise; the SQL should port to a real database without much change.
+
+I added a thin service layer (`AllocationService`, `PickEventService`) on top of the starter's controller → repository pattern. Mostly to keep transactions and business rules in one place once allocation and picking got more involved.
 
 ## Run
 
 ```sh
-./mvnw spring-boot:run     # (or: mvn spring-boot:run)
-# service starts on http://localhost:8000
-
-./mvnw test                # runs the test suite
+mvn spring-boot:run    # http://localhost:8000
+mvn test
 ```
 
-If you don't have a wrapper, plain `mvn spring-boot:run` and `mvn test` work
-identically (the scaffold doesn't ship a wrapper to keep the repo tiny).
+H2 console: `http://localhost:8000/h2-console` — JDBC URL `jdbc:h2:mem:wms`, user `sa`, no password.
 
-`http://localhost:8000/h2-console` is enabled if you want to peek at the data
-(JDBC URL: `jdbc:h2:mem:wms`, user `sa`, no password).
+## Allocation strategy
 
-## What's provided
+FIFO by `received_at` — oldest stock gets picked first. If one bin can't cover a full line, the remainder spills into the next oldest bin. Allocation is all-or-nothing: if the order can't be fully satisfied, nothing gets reserved and you get a `409` with a breakdown of what *could* have been allocated.
 
-- `POST /orders` and `GET /orders/{orderId}` — fully implemented, use as a
-  style reference for layering and error handling
-- `GET /inventory/{skuId}` — fully implemented
-- `POST /orders/{orderId}/allocate` — **stub** returning 501
-- `POST /pick-events` — **stub** returning 501
-- `POST /pick-events/short-pick` — **stub** returning 501
-- `schema.sql` and `data.sql` matching §6 of the brief, with a couple of
-  `-- TODO` markers where you should be making decisions
-- `OrderControllerTest`, `InventoryControllerTest` — 5 passing tests showing
-  the testing style we'd like to see
-- `AllocationControllerTest`, `PickEventControllerTest`, `InvariantTest` —
-  ~13 disabled reference tests. Each one's `@DisplayName` and inline comment
-  describes the scenario. Enable them (and finish them) as you complete each
-  TODO.
+Re-allocating an already-allocated order is idempotent — second call returns the same reservations, no double-booking.
 
-On a fresh checkout, `mvn test` should pass.
+## Short-pick semantics
 
-## What's not provided (your work)
+When a picker reports `quantity_short`, that's how many units they *couldn't* find. Found quantity = what's still unpicked on the reservation minus `quantity_short`.
 
-The endpoint stubs throw 501 with a reference to the TODOs inside the
-controller. Read them — each TODO is tagged with a task number (T1 … T8) that
-maps to the suggested sequence in `01_candidate_take_home.md`.
+- **Reservation:** `quantity_picked` goes up by the found amount; status becomes `SHORT` if the line isn't fully satisfied.
+- **Bin:** `on_hand` drops by what was physically taken; `reserved` drops by all remaining unpicked quantity (releases the commitment).
+- **Order:** moves to `PICKING` during partial work, `SHORT` if a line can't be fully met, `PICKED` when everything lines up.
 
-The schema is incomplete on purpose:
-- `pick_events` has no `client_event_id` uniqueness constraint — you decide what
-  it should look like.
-- There is no `audit_log` table — you decide whether you need one and what
-  shape it takes.
+I didn't try to cascade short-picks to other reservations on the same bin — that's a real warehouse problem, but out of scope for a 2-hour window.
 
-## Design choices baked in (called out so you can change them deliberately)
+## Concurrency
 
-- **JdbcTemplate, not JPA.** You write SQL. This makes concurrency primitives
-  (`SELECT ... FOR UPDATE`, conditional `UPDATE`) explicit instead of hidden
-  behind Hibernate.
-- **`MODE=PostgreSQL`.** H2 accepts Postgres-flavored SQL, including
-  `SELECT ... FOR UPDATE`. Write SQL you'd be comfortable shipping to Postgres.
-- **CHECK constraints in `schema.sql`.** `quantity_on_hand >= 0` and
-  `quantity_reserved <= quantity_on_hand` are enforced at the DB. You can rely
-  on these or remove them; if you remove them, do so deliberately and explain why.
-- **No service layer.** Controllers talk to repositories directly. Refactor if
-  you prefer; we don't grade adherence to any particular layering.
-- **Tests use `@Transactional` rollback** so each test starts from the seed
-  state. Concurrency tests can't rely on this — handle their state explicitly.
+For allocation: lock the order row and bin rows with `FOR UPDATE`, plan the full allocation before writing anything, and use conditional `UPDATE`s so two callers can't grab the last unit.
 
-## You may
+For picks: unique constraint on `client_event_id`, insert the event first, then apply inventory changes. Retries re-check after locking the reservation so they don't hit overpick validation by mistake.
 
-- Change the schema, models, framework, or DB.
-- Rewrite any provided code if you disagree with it.
-- Delete tests that don't fit and write better ones.
+## Audit trail
 
-## You should not
+Append-only `audit_log` table. Events get written on order create, allocate, pick, short-pick, and status changes. `GET /orders/{orderId}` returns them as `auditTrail` in chronological order.
 
-- Spend time on the scaffold's already-resolved decisions (deployment, auth,
-  config management). Treat the scaffold as the contract. The brief is the contract.
+---
+
+## How I built this
+
+I read through the brief and starter first, then worked task-by-task (T1 → T8) instead of trying to wire everything at once. Allocation came first since everything downstream depends on reservations existing. T3 (all-or-nothing) and T4 (concurrency) took longer than the happy path — especially getting the plan-then-commit flow right so a failed allocation doesn't leave half-written reservations.
+
+Pick idempotency (T6) had a subtle bug at first: concurrent retries were failing with overpick errors because I validated before checking if the event was already recorded. Fixing the order of checks (lock → dedup check → validate) sorted that out.
+
+I leaned on the disabled reference tests in the scaffold as a checklist and enabled them as I went. Concurrency tests needed their own classes without `@Transactional` rollback — easy to miss if you're not reading the starter README carefully.
+
+## Tradeoffs & Decisions
+
+**What I cut or kept simple:**
+- No allocation expiry or order cancellation flows
+- No short-pick cascade when a bin count turns out wrong
+- Audit `detail` is hand-built JSON strings, not a proper serializer — fine for now, wouldn't ship it that way
+- `ORDER_STATUS_CHANGED` can log even when status hasn't actually changed — minor noise, didn't polish it
+
+**What I'd do with another 2 hours:**
+- Clean up the README/scaffold mismatch (this file still lived inside the starter template for a while)
+- Add integration test for the full worked example from the brief (ORD-1001 end-to-end)
+- Tighten audit event ordering with an explicit sequence number instead of relying on timestamps
+- Maybe extract shared test helpers for create-and-allocate — there's some copy-paste across test classes
+
+**Where the solution is weakest:**
+- Short-pick and bin inventory corrections in a real warehouse are messier than what I modelled
+- I haven't load-tested the locking strategy under heavy contention — it should be correct, but that's an assumption
+- Error responses are functional but not as descriptive as they'd be in a production API (no structured problem details everywhere)
+
+---
+
+## AI assistance disclosure
+
+I used Cursor for a few things:
+
+1. Walking through the assignment at the start to make sure I understood the tasks and invariants.
+2. Putting together a T1–T8 plan so I didn't lose track of what to do next.
+3. Scaffolding tests and running `mvn test` to check each task before moving on.
+
+The implementation choices above are mine — I went through the code task by task and committed as I went. Happy to talk through any of it in the pairing session.
